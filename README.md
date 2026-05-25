@@ -27,15 +27,53 @@ client → IOCTL_DISPATCH(input={type, ...args})
 ## Commands
 
 ```
+# Inspection
 client list                                  list all processes
 client modules <pid>                         list modules in process
 client base    <pid> <module-name>           module base + size
+client regions <pid>                         list committed memory regions
 client read    <pid> <hex-addr> <size>       hex-dump memory
 client scan    <pid> <module-name> "<sig>"   pattern scan within module
+
+# Trainer framework
+client write   <pid> <hex-addr> "DE AD BE EF"   raw byte write
+client wu32    <pid> <hex-addr> <value>         write 32-bit unsigned
+client wf32    <pid> <hex-addr> <float>         write 32-bit float
+client find    <pid> <type> <value>             scan all writable memory for a value
+client freeze  <pid> <hex-addr> <type> <val>    re-write value in a loop (Ctrl-C to stop)
+client ptr     <pid> <hex-base> <off1> [...]    resolve pointer chain [[base+o1]+o2]+...
 ```
 
-Pattern format: hex bytes separated by spaces, `?` (or `??`) for wildcards.
+Pattern format: hex bytes separated by spaces, `?`/`??` for wildcards.
 Example: `"48 8B 05 ? ? ? ?"`.
+
+Value types: `u32 i32 u64 i64 f32 f64`.
+
+## Intended use
+
+Single-player game trainer / reverse engineering on processes you own or where modding is explicitly permitted (Skyrim and other Bethesda titles, mod-friendly indie games, CTF binaries, your own programs). **Not for multiplayer cheating** — that's both a ToS violation and not what this tool exists for.
+
+### Typical trainer workflow
+
+```cmd
+# 1. find your game
+client list | findstr /i myGame
+
+# 2. note its modules
+client modules 1234
+
+# 3. start scanning for a known value (e.g. health = 100)
+client find 1234 u32 100
+
+# 4. take damage in-game, scan again with the new value
+client find 1234 u32 87
+
+# 5. addresses that appear in both lists are candidates. Freeze one:
+client freeze 1234 7FF712340000 u32 100
+```
+
+For values that move between game launches, use `ptr` to resolve a stable
+pointer chain from a module base to the dynamic address.
 
 - **`shared/ioctl_shared.h`** — IOCTL code (`CTL_CODE`) + `READ_MEMORY_REQUEST` struct used by both sides.
 - **`driver/driver.c`** — WDM driver: device + symlink, IRP dispatch, `MmCopyVirtualMemory` for safe cross-process reads.

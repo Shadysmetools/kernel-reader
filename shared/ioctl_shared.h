@@ -18,6 +18,8 @@ typedef enum _REQUEST_TYPE {
     REQ_PROCESS_LIST       = 2,
     REQ_MODULE_LIST        = 3,
     REQ_MODULE_BY_NAME     = 4,
+    REQ_WRITE_MEMORY       = 5,
+    REQ_QUERY_REGIONS      = 6,
 } REQUEST_TYPE;
 
 #pragma pack(push, 1)
@@ -85,6 +87,36 @@ typedef struct _MODULE_BY_NAME_OUT {
     unsigned long long BaseAddress;
     unsigned long long Size;
 } MODULE_BY_NAME_OUT, *PMODULE_BY_NAME_OUT;
+
+// REQ_WRITE_MEMORY — input buffer: header + req metadata + N bytes payload
+typedef struct _REQ_WRITE_MEMORY_IN {
+    REQUEST_HEADER Header;
+    unsigned int   _pad;
+    unsigned long long ProcessId;
+    unsigned long long TargetAddress;
+    unsigned long long Size;
+    // followed by `Size` payload bytes
+} REQ_WRITE_MEMORY_IN, *PREQ_WRITE_MEMORY_IN;
+
+// REQ_QUERY_REGIONS — enumerate committed regions in target process
+typedef struct _REQ_QUERY_REGIONS_IN {
+    REQUEST_HEADER Header;
+    unsigned int   _pad;
+    unsigned long long ProcessId;
+} REQ_QUERY_REGIONS_IN, *PREQ_QUERY_REGIONS_IN;
+
+typedef struct _REGION_ENTRY {
+    unsigned long long BaseAddress;
+    unsigned long long Size;
+    unsigned int       Protect;    // PAGE_READWRITE, etc.
+    unsigned int       Type;       // MEM_PRIVATE, MEM_IMAGE, MEM_MAPPED
+} REGION_ENTRY, *PREGION_ENTRY;
+
+typedef struct _QUERY_REGIONS_OUT {
+    unsigned int Count;
+    unsigned int _pad;
+    // followed by `Count` REGION_ENTRY records
+} QUERY_REGIONS_OUT, *PQUERY_REGIONS_OUT;
 
 #pragma pack(pop)
 

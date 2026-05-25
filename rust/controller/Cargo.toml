@@ -8,6 +8,7 @@ license.workspace = true
 shared    = { path = "../shared", features = ["std"] }
 thiserror = "1"
 anyhow    = "1"
+ctrlc     = "3"
 
 [target.'cfg(windows)'.dependencies]
 windows-sys = { version = "0.59", features = [

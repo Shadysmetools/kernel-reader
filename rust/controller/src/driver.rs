@@ -158,6 +158,67 @@ impl Driver {
         Ok(unsafe { core::ptr::read_unaligned(out.as_ptr() as *const ModuleByNameOut) })
     }
 
+    pub fn list_regions(&self, pid: u64) -> Result<Vec<RegionEntry>, DriverError> {
+        let req = ReqQueryRegionsIn {
+            header:     RequestHeader { type_: RequestType::QueryRegions as u32 },
+            _pad:       0,
+            process_id: pid,
+        };
+        let in_bytes = unsafe { any_as_bytes(&req) };
+        let mut out = vec![0u8; KR_MAX_OUTPUT_BYTES];
+        let got = self.ioctl(in_bytes, &mut out)?;
+        if got < size_of::<QueryRegionsOut>() {
+            return Err(DriverError::Truncated { got, wanted: size_of::<QueryRegionsOut>() });
+        }
+        let hdr: QueryRegionsOut = unsafe {
+            core::ptr::read_unaligned(out.as_ptr() as *const QueryRegionsOut)
+        };
+        let count = hdr.count as usize;
+        let stride = size_of::<RegionEntry>();
+        let mut result = Vec::with_capacity(count);
+        for i in 0..count {
+            let off = size_of::<QueryRegionsOut>() + i * stride;
+            if off + stride > got { break; }
+            let entry: RegionEntry = unsafe {
+                core::ptr::read_unaligned(out.as_ptr().add(off) as *const RegionEntry)
+            };
+            result.push(entry);
+        }
+        Ok(result)
+    }
+
+    pub fn write(&self, pid: u64, va: u64, payload: &[u8]) -> Result<usize, DriverError> {
+        if payload.is_empty() { return Ok(0); }
+        if payload.len() > 0x4000 {
+            return Err(DriverError::Truncated { got: 0x4000, wanted: payload.len() });
+        }
+        let header = ReqWriteMemoryIn {
+            header:         RequestHeader { type_: RequestType::WriteMemory as u32 },
+            _pad:           0,
+            process_id:     pid,
+            target_address: va,
+            size:           payload.len() as u64,
+        };
+        let hdr_size = size_of::<ReqWriteMemoryIn>();
+        let mut io = vec![0u8; hdr_size + payload.len()];
+        unsafe {
+            core::ptr::copy_nonoverlapping(
+                &header as *const _ as *const u8, io.as_mut_ptr(), hdr_size);
+        }
+        io[hdr_size..].copy_from_slice(payload);
+        let mut returned: u32 = 0;
+        let ok = unsafe {
+            DeviceIoControl(
+                self.handle, IOCTL_DISPATCH,
+                io.as_ptr() as *const _, io.len() as u32,
+                core::ptr::null_mut(), 0,
+                &mut returned, null_mut(),
+            )
+        };
+        if ok == 0 { Err(DriverError::Ioctl(unsafe { GetLastError() })) }
+        else { Ok(returned as usize) }
+    }
+
     pub fn read(&self, pid: u64, va: u64, out: &mut [u8]) -> Result<usize, DriverError> {
         if out.is_empty() { return Ok(0); }
         let req = ReqReadMemoryIn {

@@ -13,7 +13,16 @@ NTSTATUS NTAPI ZwQuerySystemInformation(
     ULONG SystemInformationClass, PVOID SystemInformation,
     ULONG SystemInformationLength, PULONG ReturnLength);
 
+NTSTATUS NTAPI ZwQueryVirtualMemory(
+    HANDLE ProcessHandle, PVOID BaseAddress,
+    ULONG MemoryInformationClass, PVOID Buffer,
+    SIZE_T Length, PSIZE_T ResultLength);
+
+#define MemoryBasicInformationClass 0
+
 PPEB NTAPI PsGetProcessPeb(PEPROCESS Process);
+
+#define PAGE_NOACCESS_FLAGS 0x01  // PAGE_NOACCESS
 
 #define SystemProcessInformationClass 5
 
@@ -96,6 +105,103 @@ static NTSTATUS HandleReadMemory(PVOID sysbuf, ULONG inLen, ULONG outLen, PULONG
 
     if (NT_SUCCESS(status)) *information = copied;
     return status;
+}
+
+// ───────── Handler: REQ_WRITE_MEMORY ─────────
+// Mirror of HandleReadMemory but copies the OTHER direction.
+// Same MmCopyVirtualMemory primitive, no special privilege needed.
+
+static NTSTATUS HandleWriteMemory(PVOID sysbuf, ULONG inLen, ULONG outLen, PULONG_PTR information) {
+    UNREFERENCED_PARAMETER(outLen);
+    if (inLen < sizeof(REQ_WRITE_MEMORY_IN)) return STATUS_BUFFER_TOO_SMALL;
+    REQ_WRITE_MEMORY_IN req = *(PREQ_WRITE_MEMORY_IN)sysbuf;
+    if (req.Size == 0) return STATUS_INVALID_PARAMETER;
+    if (inLen < sizeof(REQ_WRITE_MEMORY_IN) + req.Size) return STATUS_BUFFER_TOO_SMALL;
+    if (req.Size > 0x4000) return STATUS_INVALID_PARAMETER; // cap single write at 16KB
+
+    PUCHAR payload = (PUCHAR)sysbuf + sizeof(REQ_WRITE_MEMORY_IN);
+
+    PEPROCESS target = NULL;
+    NTSTATUS status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)req.ProcessId, &target);
+    if (!NT_SUCCESS(status)) return status;
+
+    SIZE_T copied = 0;
+    status = MmCopyVirtualMemory(
+        PsGetCurrentProcess(), payload,
+        target, (PVOID)(ULONG_PTR)req.TargetAddress,
+        (SIZE_T)req.Size, KernelMode, &copied);
+    ObDereferenceObject(target);
+
+    if (NT_SUCCESS(status)) *information = copied;
+    return status;
+}
+
+// ───────── Handler: REQ_QUERY_REGIONS ─────────
+// Walks target VA space via ZwQueryVirtualMemory while attached. Returns
+// committed regions only (skips MEM_FREE/MEM_RESERVE).
+
+typedef struct _MEMORY_BASIC_INFO_K {
+    PVOID  BaseAddress;
+    PVOID  AllocationBase;
+    ULONG  AllocationProtect;
+    ULONG  _pad1;
+    SIZE_T RegionSize;
+    ULONG  State;       // MEM_COMMIT / MEM_FREE / MEM_RESERVE
+    ULONG  Protect;     // PAGE_*
+    ULONG  Type;        // MEM_PRIVATE / MEM_IMAGE / MEM_MAPPED
+    ULONG  _pad2;
+} MEMORY_BASIC_INFO_K;
+
+#define MEM_COMMIT_FLAG  0x1000
+
+static NTSTATUS HandleQueryRegions(PVOID sysbuf, ULONG inLen, ULONG outLen, PULONG_PTR information) {
+    if (inLen < sizeof(REQ_QUERY_REGIONS_IN)) return STATUS_BUFFER_TOO_SMALL;
+    if (outLen < sizeof(QUERY_REGIONS_OUT))   return STATUS_BUFFER_TOO_SMALL;
+    REQ_QUERY_REGIONS_IN req = *(PREQ_QUERY_REGIONS_IN)sysbuf;
+
+    PEPROCESS target = NULL;
+    NTSTATUS status = PsLookupProcessByProcessId((HANDLE)(ULONG_PTR)req.ProcessId, &target);
+    if (!NT_SUCCESS(status)) return status;
+
+    PQUERY_REGIONS_OUT hdr = (PQUERY_REGIONS_OUT)sysbuf;
+    PREGION_ENTRY arr = (PREGION_ENTRY)((PUCHAR)sysbuf + sizeof(QUERY_REGIONS_OUT));
+    ULONG maxEntries = (outLen - sizeof(QUERY_REGIONS_OUT)) / sizeof(REGION_ENTRY);
+    ULONG count = 0;
+
+    KAPC_STATE apc;
+    KeStackAttachProcess(target, &apc);
+    __try {
+        ULONG_PTR addr = 0;
+        const ULONG_PTR maxUserAddr = 0x00007FFF'FFFF0000ULL;
+        while (addr < maxUserAddr && count < maxEntries) {
+            MEMORY_BASIC_INFO_K mbi = { 0 };
+            SIZE_T retLen = 0;
+            NTSTATUS qs = ZwQueryVirtualMemory(
+                (HANDLE)-1, (PVOID)addr, MemoryBasicInformationClass,
+                &mbi, sizeof(mbi), &retLen);
+            if (!NT_SUCCESS(qs) || mbi.RegionSize == 0) break;
+
+            if (mbi.State == MEM_COMMIT_FLAG && mbi.Protect != PAGE_NOACCESS_FLAGS) {
+                arr[count].BaseAddress = (ULONG_PTR)mbi.BaseAddress;
+                arr[count].Size        = (ULONG_PTR)mbi.RegionSize;
+                arr[count].Protect     = mbi.Protect;
+                arr[count].Type        = mbi.Type;
+                count++;
+            }
+            ULONG_PTR next = (ULONG_PTR)mbi.BaseAddress + (ULONG_PTR)mbi.RegionSize;
+            if (next <= addr) break;
+            addr = next;
+        }
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        // fall through with whatever count we collected
+    }
+    KeUnstackDetachProcess(&apc);
+    ObDereferenceObject(target);
+
+    hdr->Count = count;
+    hdr->_pad  = 0;
+    *information = sizeof(QUERY_REGIONS_OUT) + count * sizeof(REGION_ENTRY);
+    return STATUS_SUCCESS;
 }
 
 // ───────── Handler: REQ_PROCESS_LIST ─────────
@@ -308,6 +414,8 @@ NTSTATUS DispatchIoctl(PDEVICE_OBJECT DeviceObject, PIRP Irp) {
         REQUEST_TYPE type = (REQUEST_TYPE)((PREQUEST_HEADER)sysbuf)->Type;
         switch (type) {
             case REQ_READ_MEMORY:    status = HandleReadMemory(sysbuf, inLen, outLen, &information); break;
+            case REQ_WRITE_MEMORY:   status = HandleWriteMemory(sysbuf, inLen, outLen, &information); break;
+            case REQ_QUERY_REGIONS:  status = HandleQueryRegions(sysbuf, inLen, outLen, &information); break;
             case REQ_PROCESS_LIST:   status = HandleProcessList(sysbuf, inLen, outLen, &information); break;
             case REQ_MODULE_LIST:    status = HandleModuleList(sysbuf, inLen, outLen, &information); break;
             case REQ_MODULE_BY_NAME: status = HandleModuleByName(sysbuf, inLen, outLen, &information); break;

@@ -30,6 +30,8 @@ pub enum RequestType {
     ProcessList    = 2,
     ModuleList     = 3,
     ModuleByName   = 4,
+    WriteMemory    = 5,
+    QueryRegions   = 6,
 }
 
 #[repr(C)]
@@ -112,6 +114,43 @@ pub struct ModuleByNameOut {
     pub size:         u64,
 }
 
+// ── REQ_WRITE_MEMORY ────────────────────────────────────────────────────────
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct ReqWriteMemoryIn {
+    pub header:         RequestHeader,
+    pub _pad:           u32,
+    pub process_id:     u64,
+    pub target_address: u64,
+    pub size:           u64,
+    // followed by `size` payload bytes in the same IOCTL input buffer
+}
+
+// ── REQ_QUERY_REGIONS ───────────────────────────────────────────────────────
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct ReqQueryRegionsIn {
+    pub header:     RequestHeader,
+    pub _pad:       u32,
+    pub process_id: u64,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct RegionEntry {
+    pub base_address: u64,
+    pub size:         u64,
+    pub protect:      u32,
+    pub type_:        u32,
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct QueryRegionsOut {
+    pub count: u32,
+    pub _pad:  u32,
+}
+
 // ── Layout assertions: must match C struct sizes byte-for-byte ──────────────
 const _: () = assert!(core::mem::size_of::<RequestHeader>()    == 4);
 const _: () = assert!(core::mem::size_of::<ReqReadMemoryIn>()  == 4 + 4 + 8 + 8 + 8);
@@ -121,6 +160,10 @@ const _: () = assert!(core::mem::size_of::<ModuleEntry>()      == 8 + 8 + NAME_L
 const _: () = assert!(core::mem::size_of::<ModuleListOut>()    == 8);
 const _: () = assert!(core::mem::size_of::<ReqModuleByNameIn>() == 4 + 4 + 8 + NAME_LEN * 2);
 const _: () = assert!(core::mem::size_of::<ModuleByNameOut>()  == 16);
+const _: () = assert!(core::mem::size_of::<ReqWriteMemoryIn>() == 4 + 4 + 8 + 8 + 8);
+const _: () = assert!(core::mem::size_of::<ReqQueryRegionsIn>() == 4 + 4 + 8);
+const _: () = assert!(core::mem::size_of::<RegionEntry>()       == 8 + 8 + 4 + 4);
+const _: () = assert!(core::mem::size_of::<QueryRegionsOut>()   == 8);
 
 #[cfg(test)]
 mod tests {
