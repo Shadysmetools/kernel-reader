@@ -23,3 +23,9 @@ Release/
 *.log
 *.tlog
 *.lastbuildstate
+
+# Rust
+rust/target/
+rust/**/target/
+**/*.rs.bk
+# Cargo.lock is committed (workspace contains a binary crate)

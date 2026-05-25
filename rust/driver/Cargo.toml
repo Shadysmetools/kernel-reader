@@ -1,0 +1,21 @@
+[package]
+name    = "driver"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+publish = false
+
+[lib]
+crate-type = ["cdylib"]
+
+[dependencies]
+shared = { path = "../shared", default-features = false }
+
+[build-dependencies]
+# Optional WDK build helper. If not available, set KERNEL_READER_SKIP_WDK=1
+# and `cargo check` will still parse this crate (useful in CI).
+wdk-build = { version = "0.3", optional = true }
+
+[features]
+default = []
+wdk     = ["dep:wdk-build"]

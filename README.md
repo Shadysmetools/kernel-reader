@@ -17,6 +17,8 @@ A minimal, educational, **read-only** Windows kernel driver + user-mode client t
 - **`driver/driver.c`** — WDM driver: device + symlink, IRP dispatch, `MmCopyVirtualMemory` for safe cross-process reads.
 - **`client/client.cpp`** — opens `\\.\KernelReader`, sends the IOCTL, hex-dumps the result.
 
+A parallel **Rust port** lives under [`rust/`](./rust) — same architecture (shared / driver / controller), structured like Valthrun's actual workspace.
+
 ## Build
 
 ### Driver (Visual Studio + WDK)

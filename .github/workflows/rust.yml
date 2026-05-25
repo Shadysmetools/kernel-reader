@@ -1,0 +1,40 @@
+name: rust
+
+on:
+  push:
+    branches: [main]
+    paths: ['rust/**', '.github/workflows/rust.yml']
+  pull_request:
+    branches: [main]
+    paths: ['rust/**', '.github/workflows/rust.yml']
+  workflow_dispatch:
+
+jobs:
+  shared-and-controller:
+    name: shared + controller (stable msvc)
+    runs-on: windows-latest
+    defaults:
+      run:
+        working-directory: rust
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: rust
+
+      - name: test shared
+        run: cargo test -p shared
+
+      - name: build controller
+        run: cargo build -p controller --release
+
+      - name: check driver (no WDK)
+        run: cargo check -p driver
+        # Without --features wdk this is a syntax/borrow check only;
+        # producing driver.sys requires the WDK toolchain locally.
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: controller-rs-x64
+          path: rust/target/release/controller.exe

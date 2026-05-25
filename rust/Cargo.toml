@@ -1,0 +1,22 @@
+[workspace]
+resolver = "2"
+members  = ["shared", "controller", "driver"]
+# `driver` builds only on Windows with a WDK toolchain. Excluded from
+# default `cargo build` by being a separate member that errors loudly
+# without WDK env vars (see driver/build.rs).
+
+[workspace.package]
+edition = "2021"
+license = "MIT"
+authors = ["Shady Al-Halawani"]
+
+[profile.release]
+panic         = "abort"
+lto           = true
+codegen-units = 1
+opt-level     = 3
+debug         = false
+overflow-checks = false
+
+[profile.dev]
+panic = "abort"
