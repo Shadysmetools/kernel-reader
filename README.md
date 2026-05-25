@@ -20,14 +20,22 @@ A minimal, educational, **read-only** Windows kernel driver + user-mode client t
 ## Build
 
 ### Driver (Visual Studio + WDK)
-1. New project → **Empty WDM Driver**, x64 Release.
-2. Add `driver/driver.c` (and `driver/driver.inf`).
-3. Build → produces `driver.sys`.
+1. Install Visual Studio 2022 with the **Desktop C++** workload and the **WDK** (Windows Driver Kit) + matching SDK.
+2. Open `kernel-reader.sln` → set config to `Release | x64` → Build.
+3. Output: `driver/x64/Release/driver.sys`.
 
 ### Client
+From a **x64 Native Tools Command Prompt for VS**:
 ```cmd
-cl /EHsc client\client.cpp
+build-client.bat
 ```
+Or manually:
+```cmd
+cl /EHsc client\client.cpp /link /OUT:client.exe
+```
+
+### CI
+Every push builds `client.exe` on a hosted Windows runner; artifact downloadable from the [Actions tab](../../actions).
 
 ## Load & Run (test VM)
 ```cmd
