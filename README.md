@@ -6,12 +6,36 @@ A minimal, educational, **read-only** Windows kernel driver + user-mode client t
 
 ## Architecture
 
+A single `IOCTL_DISPATCH` carries a `RequestType` discriminator in the first 4 bytes of the input buffer. The kernel switches on it to pick a handler — same pattern Valthrun uses.
+
 ```
-+----------------------+        IOCTL         +----------------------+
-|  client.exe (user)   | -------------------> |  driver.sys (kernel) |
-|  CreateFile + IOCTL  | <------------------- |  MmCopyVirtualMemory |
-+----------------------+    bytes copied      +----------------------+
+client → IOCTL_DISPATCH(input={type, ...args})
+              ↓
+       ┌──────┴───────┐
+       │  dispatch    │
+       └──────┬───────┘
+              │
+   ┌──────────┼──────────┬─────────────┐
+   ▼          ▼          ▼             ▼
+ read     process     module       module
+ memory   list        list         by name
+   │        │           │             │
+   ▼        ▼           ▼             ▼
+ MmCopy   ZwQuery   KeStackAttach + walk PEB->Ldr (SEH-guarded)
 ```
+
+## Commands
+
+```
+client list                                  list all processes
+client modules <pid>                         list modules in process
+client base    <pid> <module-name>           module base + size
+client read    <pid> <hex-addr> <size>       hex-dump memory
+client scan    <pid> <module-name> "<sig>"   pattern scan within module
+```
+
+Pattern format: hex bytes separated by spaces, `?` (or `??`) for wildcards.
+Example: `"48 8B 05 ? ? ? ?"`.
 
 - **`shared/ioctl_shared.h`** — IOCTL code (`CTL_CODE`) + `READ_MEMORY_REQUEST` struct used by both sides.
 - **`driver/driver.c`** — WDM driver: device + symlink, IRP dispatch, `MmCopyVirtualMemory` for safe cross-process reads.
