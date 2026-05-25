@@ -1,0 +1,25 @@
+# Build output
+x64/
+x86/
+Debug/
+Release/
+*.obj
+*.pdb
+*.ilk
+*.exp
+*.lib
+*.sys
+*.cat
+*.exe
+
+# VS / VS Code
+.vs/
+*.user
+*.suo
+.vscode/
+
+# WDK
+*.inf_amd64_*
+*.log
+*.tlog
+*.lastbuildstate
