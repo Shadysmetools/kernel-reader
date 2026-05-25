@@ -44,7 +44,7 @@ impl Driver {
                 null_mut(),
                 OPEN_EXISTING,
                 0,
-                0,
+                null_mut(),
             )
         };
         if handle == INVALID_HANDLE_VALUE {
