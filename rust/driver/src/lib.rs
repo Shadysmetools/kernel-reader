@@ -16,7 +16,7 @@
 
 use core::{mem::size_of, ptr::null_mut};
 
-use shared::{ReadMemoryRequest, IOCTL_READ_PROCESS_MEMORY};
+use shared::{ReqReadMemoryIn, IOCTL_DISPATCH};
 
 // ─── Kernel types we reference ──────────────────────────────────────────────
 // We declare a tiny subset by hand so this crate doesn't drag in the full
@@ -105,10 +105,10 @@ fn read_process_memory(pid: u64, src_va: u64, dst: &mut [u8]) -> Result<usize, N
 // `sysbuf` is the I/O manager's kernel-side copy of the user buffer
 // (METHOD_BUFFERED). We never touch a user pointer directly.
 unsafe fn handle_read(sysbuf: *mut u8, in_len: usize, out_len: usize) -> (NTSTATUS, usize) {
-    if sysbuf.is_null() || in_len < size_of::<ReadMemoryRequest>() {
+    if sysbuf.is_null() || in_len < size_of::<ReqReadMemoryIn>() {
         return (STATUS_BUFFER_TOO_SMALL, 0);
     }
-    let req: ReadMemoryRequest = core::ptr::read_unaligned(sysbuf as *const _);
+    let req: ReqReadMemoryIn = core::ptr::read_unaligned(sysbuf as *const _);
     if req.size == 0 || req.size as usize > out_len {
         return (STATUS_INVALID_PARAMETER, 0);
     }
@@ -118,6 +118,13 @@ unsafe fn handle_read(sysbuf: *mut u8, in_len: usize, out_len: usize) -> (NTSTAT
         Err(s) => (s, 0),
     }
 }
+
+// Note: the Rust driver scaffold currently only demonstrates the read-memory
+// handler. The C driver implements all four dispatch types (read, process
+// list, module list, module by name); porting those to Rust requires
+// declaring the additional kernel APIs (ZwQuerySystemInformation,
+// KeStackAttachProcess, PsGetProcessPeb) and follows the same pattern as
+// `read_process_memory` above. See driver/driver.c for the reference impl.
 
 // NOTE: `DriverEntry`, dispatch routines, and device/symlink creation depend
 // on `IO_STACK_LOCATION` / `DEVICE_OBJECT` / `IRP` struct shapes that are
