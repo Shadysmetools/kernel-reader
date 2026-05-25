@@ -32,14 +32,14 @@ pub enum RequestType {
     ModuleByName   = 4,
 }
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct RequestHeader {
     pub type_: u32,
 }
 
 // ── REQ_READ_MEMORY ─────────────────────────────────────────────────────────
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ReqReadMemoryIn {
     pub header:         RequestHeader,
@@ -50,20 +50,20 @@ pub struct ReqReadMemoryIn {
 }
 
 // ── REQ_PROCESS_LIST ────────────────────────────────────────────────────────
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ReqProcessListIn {
     pub header: RequestHeader,
 }
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct ProcessEntry {
     pub process_id: u64,
     pub name:       [u16; NAME_LEN],
 }
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ProcessListOut {
     pub count: u32,
@@ -72,7 +72,7 @@ pub struct ProcessListOut {
 }
 
 // ── REQ_MODULE_LIST ─────────────────────────────────────────────────────────
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ReqModuleListIn {
     pub header:     RequestHeader,
@@ -80,7 +80,7 @@ pub struct ReqModuleListIn {
     pub process_id: u64,
 }
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct ModuleEntry {
     pub base_address: u64,
@@ -88,7 +88,7 @@ pub struct ModuleEntry {
     pub name:         [u16; NAME_LEN],
 }
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ModuleListOut {
     pub count: u32,
@@ -96,7 +96,7 @@ pub struct ModuleListOut {
 }
 
 // ── REQ_MODULE_BY_NAME ──────────────────────────────────────────────────────
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone)]
 pub struct ReqModuleByNameIn {
     pub header:     RequestHeader,
@@ -105,7 +105,7 @@ pub struct ReqModuleByNameIn {
     pub name:       [u16; NAME_LEN],
 }
 
-#[repr(C, packed)]
+#[repr(C)]
 #[derive(Copy, Clone, Debug)]
 pub struct ModuleByNameOut {
     pub base_address: u64,
