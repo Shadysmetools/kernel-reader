@@ -13,6 +13,12 @@
 //   client freeze  <pid> <hex-addr> <type> <val> -- write value in a loop
 //   client ptr     <pid> <hex-base> <off>...     -- resolve pointer chain
 //
+// Incremental (Cheat-Engine-style) workflow:
+//   client find-first <pid> <type> <value> <session-file>     full scan → file
+//   client find-next  <pid> <session-file> <value>            keep addrs holding value
+//   client find-cmp   <pid> <session-file> <op>               op: changed|unchanged|inc|dec
+//   client find-show  <session-file>                          print session contents
+//
 // Type: u32 | i32 | f32 | u64 | f64
 
 #include <windows.h>
@@ -401,6 +407,189 @@ int cmd_ptr(Driver& d, uint64_t pid, uint64_t base, const std::vector<uint64_t>&
     return 0;
 }
 
+// ─── Incremental scan sessions ──────────────────────────────────────────────
+//
+// Session file format (plain text, tab-separated):
+//   # kr-session v1 pid=<pid> type=<type>
+//   <addr-hex>\t<value>
+//   ...
+//
+// Values stored as the canonical decimal/float representation for the type.
+
+struct Session {
+    uint64_t              pid;
+    std::wstring          type;       // u32|i32|u64|f32|f64
+    // entries: address → string-formatted value
+    std::vector<std::pair<uint64_t, std::wstring>> entries;
+};
+
+bool session_save(const std::wstring& path, const Session& s) {
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"w") != 0 || !f) return false;
+    fwprintf(f, L"# kr-session v1 pid=%llu type=%s\n", s.pid, s.type.c_str());
+    for (auto& [a, v] : s.entries) fwprintf(f, L"%016llx\t%s\n", a, v.c_str());
+    fclose(f);
+    return true;
+}
+
+bool session_load(const std::wstring& path, Session& s) {
+    FILE* f = nullptr;
+    if (_wfopen_s(&f, path.c_str(), L"r") != 0 || !f) return false;
+    s.entries.clear();
+    wchar_t line[512];
+    bool gotHeader = false;
+    while (fgetws(line, 512, f)) {
+        if (line[0] == L'#') {
+            // parse: # kr-session v1 pid=N type=T
+            wchar_t typeBuf[16] = {0};
+            if (swscanf_s(line, L"# kr-session v1 pid=%llu type=%15s",
+                          &s.pid, typeBuf, (unsigned)_countof(typeBuf)) == 2) {
+                s.type = typeBuf;
+                gotHeader = true;
+            }
+            continue;
+        }
+        wchar_t* tab = wcschr(line, L'\t');
+        if (!tab) continue;
+        *tab = 0;
+        uint64_t addr = _wcstoui64(line, nullptr, 16);
+        std::wstring val = tab + 1;
+        // strip trailing newline
+        while (!val.empty() && (val.back() == L'\n' || val.back() == L'\r')) val.pop_back();
+        s.entries.emplace_back(addr, std::move(val));
+    }
+    fclose(f);
+    return gotHeader;
+}
+
+// Read `n` bytes from target into out — used to refresh a single address.
+bool read_at(Driver& d, uint64_t pid, uint64_t addr, void* out, size_t n) {
+    REQ_READ_MEMORY_IN req{};
+    req.Header.Type = REQ_READ_MEMORY;
+    req.ProcessId   = pid;
+    req.TargetAddress = addr;
+    req.Size          = n;
+    std::vector<uint8_t> io(std::max<size_t>(sizeof(req), n));
+    std::memcpy(io.data(), &req, sizeof(req));
+    DWORD got = 0;
+    if (!d.call(io.data(), sizeof(req), io.data(), (DWORD)n, &got) || got < n) return false;
+    std::memcpy(out, io.data(), n);
+    return true;
+}
+
+// Format a freshly-read value back to its canonical string form for the type.
+std::wstring fmt_value(const std::wstring& type, const uint8_t* p) {
+    wchar_t buf[64];
+    if      (type == L"u32") { uint32_t v; std::memcpy(&v, p, 4); swprintf_s(buf, L"%u", v); }
+    else if (type == L"i32") { int32_t  v; std::memcpy(&v, p, 4); swprintf_s(buf, L"%d", v); }
+    else if (type == L"u64") { uint64_t v; std::memcpy(&v, p, 8); swprintf_s(buf, L"%llu", v); }
+    else if (type == L"i64") { int64_t  v; std::memcpy(&v, p, 8); swprintf_s(buf, L"%lld", v); }
+    else if (type == L"f32") { float    v; std::memcpy(&v, p, 4); swprintf_s(buf, L"%g", v); }
+    else if (type == L"f64") { double   v; std::memcpy(&v, p, 8); swprintf_s(buf, L"%g", v); }
+    else return L"?";
+    return buf;
+}
+
+int cmd_find_first(Driver& d, uint64_t pid, const std::wstring& type,
+                   const std::wstring& value, const std::wstring& sessFile) {
+    size_t ts = type_size(type);
+    if (ts == 0) { wprintf(L"unknown type\n"); return 1; }
+    auto regs = get_regions(d, pid);
+    if (regs.empty()) { wprintf(L"no regions\n"); return 1; }
+
+    Session s; s.pid = pid; s.type = type;
+    const uint64_t chunkSize = 256 * 1024;
+    std::vector<uint8_t> buf;
+    size_t cap = 100000; // sanity cap
+
+    for (auto& r : regs) {
+        if ((r.protect & 0xCC) == 0) continue; // writable only
+        for (uint64_t off = 0; off < r.size; off += chunkSize) {
+            uint64_t want = std::min<uint64_t>(chunkSize, r.size - off);
+            buf.resize((size_t)want);
+            if (!read_at(d, pid, r.base + off, buf.data(), buf.size())) continue;
+            for (size_t i = 0; i + ts <= buf.size(); ++i) {
+                if (matches(type, buf.data() + i, value)) {
+                    s.entries.emplace_back(r.base + off + i, value);
+                    if (s.entries.size() >= cap) goto done;
+                }
+            }
+        }
+    }
+done:
+    if (!session_save(sessFile, s)) { wprintf(L"failed to write session\n"); return 1; }
+    wprintf(L"first scan: %zu matches → %s\n", s.entries.size(), sessFile.c_str());
+    return 0;
+}
+
+int cmd_find_next(Driver& d, const std::wstring& sessFile, const std::wstring& value) {
+    Session s;
+    if (!session_load(sessFile, s)) { wprintf(L"could not load session\n"); return 1; }
+    size_t ts = type_size(s.type);
+    if (ts == 0) { wprintf(L"session has bad type\n"); return 1; }
+
+    std::vector<std::pair<uint64_t, std::wstring>> kept;
+    uint8_t buf[8];
+    for (auto& [addr, _prev] : s.entries) {
+        if (!read_at(d, s.pid, addr, buf, ts)) continue;
+        if (matches(s.type, buf, value)) {
+            kept.emplace_back(addr, value);
+        }
+    }
+    s.entries = std::move(kept);
+    session_save(sessFile, s);
+    wprintf(L"narrowed: %zu remaining (value=%s)\n", s.entries.size(), value.c_str());
+    if (s.entries.size() <= 20) {
+        for (auto& [a, v] : s.entries) wprintf(L"  %016llx = %s\n", a, v.c_str());
+    }
+    return 0;
+}
+
+int cmd_find_cmp(Driver& d, const std::wstring& sessFile, const std::wstring& op) {
+    Session s;
+    if (!session_load(sessFile, s)) { wprintf(L"could not load session\n"); return 1; }
+    size_t ts = type_size(s.type);
+    if (ts == 0) { wprintf(L"session has bad type\n"); return 1; }
+
+    auto cmp = [&](const std::wstring& a, const std::wstring& b) -> int {
+        if (s.type == L"f32" || s.type == L"f64") {
+            double da = _wtof(a.c_str()), db = _wtof(b.c_str());
+            return (da > db) - (da < db);
+        }
+        long long la = _wtoi64(a.c_str()), lb = _wtoi64(b.c_str());
+        return (la > lb) - (la < lb);
+    };
+
+    std::vector<std::pair<uint64_t, std::wstring>> kept;
+    uint8_t buf[8];
+    for (auto& [addr, prev] : s.entries) {
+        if (!read_at(d, s.pid, addr, buf, ts)) continue;
+        std::wstring now = fmt_value(s.type, buf);
+        int c = cmp(now, prev);
+        bool keep =
+            (op == L"changed"   && c != 0) ||
+            (op == L"unchanged" && c == 0) ||
+            (op == L"inc"       && c >  0) ||
+            (op == L"dec"       && c <  0);
+        if (keep) kept.emplace_back(addr, now);
+    }
+    s.entries = std::move(kept);
+    session_save(sessFile, s);
+    wprintf(L"after '%s': %zu remaining\n", op.c_str(), s.entries.size());
+    if (s.entries.size() <= 20) {
+        for (auto& [a, v] : s.entries) wprintf(L"  %016llx = %s\n", a, v.c_str());
+    }
+    return 0;
+}
+
+int cmd_find_show(const std::wstring& sessFile) {
+    Session s;
+    if (!session_load(sessFile, s)) { wprintf(L"could not load session\n"); return 1; }
+    wprintf(L"# pid=%llu type=%s entries=%zu\n", s.pid, s.type.c_str(), s.entries.size());
+    for (auto& [a, v] : s.entries) wprintf(L"  %016llx = %s\n", a, v.c_str());
+    return 0;
+}
+
 void usage() {
     wprintf(L"usage:\n");
     wprintf(L"  client list\n");
@@ -415,6 +604,10 @@ void usage() {
     wprintf(L"  client find    <pid> <u32|i32|u64|f32|f64> <value>\n");
     wprintf(L"  client freeze  <pid> <hex-addr> <type> <value>\n");
     wprintf(L"  client ptr     <pid> <hex-base> <hex-off1> [hex-off2 ...]\n");
+    wprintf(L"  client find-first <pid> <type> <value> <session-file>\n");
+    wprintf(L"  client find-next  <pid> <session-file> <value>\n");
+    wprintf(L"  client find-cmp   <pid> <session-file> <changed|unchanged|inc|dec>\n");
+    wprintf(L"  client find-show  <session-file>\n");
 }
 
 } // namespace
@@ -462,6 +655,23 @@ int wmain(int argc, wchar_t** argv) {
         if (cmd == L"freeze" && argc == 6)
             return cmd_freeze(d, _wcstoui64(argv[2], nullptr, 10),
                               _wcstoui64(argv[3], nullptr, 16), argv[4], argv[5]);
+        if (cmd == L"find-first" && argc == 6)
+            return cmd_find_first(d, _wcstoui64(argv[2], nullptr, 10),
+                                  argv[3], argv[4], argv[5]);
+        if (cmd == L"find-next" && argc == 5) {
+            // signature: find-next <pid> <session> <value>
+            // pid is implicit in the session header; accept and validate.
+            uint64_t pidArg = _wcstoui64(argv[2], nullptr, 10);
+            (void)pidArg; // currently informational
+            return cmd_find_next(d, argv[3], argv[4]);
+        }
+        if (cmd == L"find-cmp" && argc == 5) {
+            uint64_t pidArg = _wcstoui64(argv[2], nullptr, 10);
+            (void)pidArg;
+            return cmd_find_cmp(d, argv[3], argv[4]);
+        }
+        if (cmd == L"find-show" && argc == 3)
+            return cmd_find_show(argv[2]);
         if (cmd == L"ptr" && argc >= 4) {
             std::vector<uint64_t> offs;
             for (int i = 4; i < argc; ++i) offs.push_back(_wcstoui64(argv[i], nullptr, 16));

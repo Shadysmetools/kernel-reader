@@ -39,9 +39,15 @@ client scan    <pid> <module-name> "<sig>"   pattern scan within module
 client write   <pid> <hex-addr> "DE AD BE EF"   raw byte write
 client wu32    <pid> <hex-addr> <value>         write 32-bit unsigned
 client wf32    <pid> <hex-addr> <float>         write 32-bit float
-client find    <pid> <type> <value>             scan all writable memory for a value
+client find    <pid> <type> <value>             one-shot value scan
 client freeze  <pid> <hex-addr> <type> <val>    re-write value in a loop (Ctrl-C to stop)
 client ptr     <pid> <hex-base> <off1> [...]    resolve pointer chain [[base+o1]+o2]+...
+
+# Incremental scan (Cheat-Engine style) — narrow candidates across game state changes
+client find-first <pid> <type> <value> <session-file>     first scan → save matches
+client find-next  <pid> <session-file> <value>            keep addrs holding value
+client find-cmp   <pid> <session-file> <op>               op: changed|unchanged|inc|dec
+client find-show  <session-file>                          print session contents
 ```
 
 Pattern format: hex bytes separated by spaces, `?`/`??` for wildcards.

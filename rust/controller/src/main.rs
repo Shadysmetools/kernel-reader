@@ -4,6 +4,8 @@ mod driver;
 mod pattern;
 #[cfg(windows)]
 mod trainer;
+#[cfg(windows)]
+mod session;
 
 #[cfg(not(windows))]
 fn main() {
@@ -96,6 +98,28 @@ fn main() -> anyhow::Result<()> {
             let ty = ValType::parse(&args[4])?;
             trainer::freeze(&drv, pid, va, ty, &args[5])?;
         }
+        "find-first" if args.len() == 6 => {
+            let pid: u64 = args[2].parse()?;
+            let ty = ValType::parse(&args[3])?;
+            let n = session::first(&drv, pid, ty, &args[4],
+                                   std::path::Path::new(&args[5]), 100_000)?;
+            println!("first scan: {n} matches → {}", args[5]);
+        }
+        "find-next" if args.len() == 5 => {
+            // args: <pid> <session-file> <value> — pid kept for symmetry with C client
+            let n = session::next(&drv, std::path::Path::new(&args[3]), &args[4])?;
+            println!("narrowed: {n} remaining");
+        }
+        "find-cmp" if args.len() == 5 => {
+            let op = session::CmpOp::parse(&args[4])?;
+            let n = session::cmp(&drv, std::path::Path::new(&args[3]), op)?;
+            println!("after '{}': {n} remaining", args[4]);
+        }
+        "find-show" if args.len() == 3 => {
+            let s = session::Session::load(std::path::Path::new(&args[2]))?;
+            println!("# pid={} entries={}", s.pid, s.entries.len());
+            for (a, v) in &s.entries { println!("  {a:016x} = {v}"); }
+        }
         "ptr" if args.len() >= 5 => {
             let pid: u64 = args[2].parse()?;
             let base = u64::from_str_radix(args[3].trim_start_matches("0x"), 16)?;
@@ -124,4 +148,8 @@ fn usage() {
     eprintln!("  controller find    <pid> <u32|i32|u64|f32|f64> <value>");
     eprintln!("  controller freeze  <pid> <hex-addr> <type> <value>");
     eprintln!("  controller ptr     <pid> <hex-base> <hex-off1> [hex-off2 ...]");
+    eprintln!("  controller find-first <pid> <type> <value> <session-file>");
+    eprintln!("  controller find-next  <pid> <session-file> <value>");
+    eprintln!("  controller find-cmp   <pid> <session-file> <changed|unchanged|inc|dec>");
+    eprintln!("  controller find-show  <session-file>");
 }
